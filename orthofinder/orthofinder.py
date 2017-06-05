@@ -369,7 +369,7 @@ def GetOrderedSearchCommands(seqsInfo, dirs, search_program, program_caller):
     taskSizes = [seqsInfo.nSeqsPerSpecies[i]*seqsInfo.nSeqsPerSpecies[j] for i,j in speciesPairs]
     taskSizes, speciesPairs = util.SortArrayPairByFirst(taskSizes, speciesPairs, True)
     if search_program == "blast":
-        commands = [" ".join(["tblastx", "-outfmt", "6", "-evalue", "0.001", "-query", dirs.workingDir + "Species%d.fa" % iFasta, "-db", dirs.workingDir + "BlastDBSpecies%d" % iDB, "-out", "%sBlast%d_%d.txt" % (dirs.workingDir, iFasta, iDB)]) for iFasta, iDB in speciesPairs]
+        commands = [" ".join(["blastn", "-outfmt", "6", "-evalue", "0.001", "-query", dirs.workingDir + "Species%d.fa" % iFasta, "-db", dirs.workingDir + "BlastDBSpecies%d" % iDB, "-out", "%sBlast%d_%d.txt" % (dirs.workingDir, iFasta, iDB)]) for iFasta, iDB in speciesPairs]
     else:
         commands = [program_caller.GetSearchMethodCommand_Search(search_program, dirs.workingDir + "Species%d.fa" % iFasta, dirs.workingDir + "%sDBSpecies%d" % (search_program, iDB), "%sBlast%d_%d.txt" % (dirs.workingDir, iFasta, iDB)) for iFasta, iDB in speciesPairs]
     return commands
