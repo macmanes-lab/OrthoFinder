@@ -1451,7 +1451,8 @@ if __name__ == "__main__":
     print("OrthoFinder version %s Copyright (C) 2014 David Emms\n" % util.version)
     print("""    This program comes with ABSOLUTELY NO WARRANTY.
     This is free software, and you are welcome to redistribute it under certain conditions.
-    For details please see the License.md that came with this software.\n""")
+    For details please see the License.md that came with this software.\n
+    THIS IS THE ORP VERSION FOR USE IN ORTHOFUSE\n""")
     program_caller = GetProgramCaller()
     options, fastaDir, workingDir, orthologuesDir = ProcessArgs(program_caller)
     # 2.
