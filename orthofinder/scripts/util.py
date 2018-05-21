@@ -22,7 +22,7 @@
 #      improves orthogroup inference accuracy, Genome Biology 16:157
 #
 # For any enquiries send an email to David Emms
-# david_emms@hotmail.com
+# david_emms@hotmail.com 
 
 nThreadsDefault = 16
 nAlgDefault = 1
@@ -31,23 +31,24 @@ import os
 import sys
 import glob
 import time
+import numpy as np
 import subprocess
 import datetime
 import Queue
 import multiprocessing as mp
 from collections import namedtuple
 
-import tree
+import tree, parallel_task_manager
 
 """
 Utilities
 -------------------------------------------------------------------------------
 """
 SequencesInfo = namedtuple("SequencesInfo", "nSeqs nSpecies speciesToUse seqStartingIndices nSeqsPerSpecies")
-FileInfo = namedtuple("FileInfo", "workingDir graphFilename")     
+FileInfo = namedtuple("FileInfo", "workingDir graphFilename separatePickleDir")     
 
 picProtocol = 1
-version = "1.1.7"
+version = "2.2.6"
 
 # Fix LD_LIBRARY_PATH when using pyinstaller 
 my_env = os.environ.copy()
@@ -72,19 +73,22 @@ Command & parallel command management
 -------------------------------------------------------------------------------
 """
 
-def RunCommand(command, shell=False, qHideOutput = False):
+def RunCommand(command, qShell=True, qHideOutput = True):
+    """ Run a single command """
     if qHideOutput:
-        subprocess.call(command, env=my_env, shell=shell, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        subprocess.call(command, env=my_env, shell=qShell, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     else:
-        subprocess.call(command, env=my_env, shell=shell)
+        subprocess.call(command, env=my_env, shell=qShell)
             
-def RunOrderedCommandList(commandList, qHideStdout):
+def RunOrderedCommandList(commandList, qShell=True, qHideStdout = True):
+    """ Run a list of commands """
+    FNULL = open(os.devnull, 'w')
     if qHideStdout:
         for cmd in commandList:
-            subprocess.call(cmd, shell=True, stdout=subprocess.PIPE, env=my_env)
+            subprocess.call(cmd, shell=qShell, stdout=subprocess.PIPE, stderr=FNULL, close_fds=True, env=my_env)
     else:
         for cmd in commandList:
-            subprocess.call(cmd, shell=True, env=my_env)
+            subprocess.call(cmd, shell=qShell, stderr=FNULL, close_fds=True, env=my_env)
     
 def CanRunCommand(command, qAllowStderr = False, qPrint = True):
     if qPrint: PrintNoNewLine("Test can run \"%s\"" % command)       # print without newline
@@ -98,20 +102,59 @@ def CanRunCommand(command, qAllowStderr = False, qPrint = True):
         return True
     else:
         if qPrint: print(" - failed")
+        print("\nstdout:")        
+        for l in stdout: print(l)
+        print("\nstderr:")        
+        for l in stderr: print(l)
         return False
         
-def Worker_RunCommand(cmd_queue, nProcesses, nToDo, qShell=False):
+def Worker_RunCommand(cmd_queue, nProcesses, nToDo, qShell=True, qHideStdout=True):
+    """ Run commands from queue until the queue is empty """
     while True:
         try:
             i, command = cmd_queue.get(True, 1)
             nDone = i - nProcesses + 1
             if nDone >= 0 and divmod(nDone, 10 if nToDo <= 200 else 100 if nToDo <= 2000 else 1000)[1] == 0:
                 PrintTime("Done %d of %d" % (nDone, nToDo))
-            subprocess.call(command, env=my_env, shell=qShell)
+            RunCommand(command, qShell, qHideStdout)
         except Queue.Empty:
             return   
+            
+def Worker_RunCommands_And_Move(cmd_and_filename_queue, nProcesses, nToDo, qListOfLists):
+    """
+    Continuously takes commands that need to be run from the cmd_and_filename_queue until the queue is empty. If required, moves 
+    the output filename produced by the cmd to a specified filename. The elements of the queue can be single cmd_filename tuples
+    or an ordered list of tuples that must be run in the provided order.
+  
+    Args:
+        cmd_and_filename_queue - queue containing (cmd, actual_target_fn) tuples (if qListOfLists is False) of a list of such 
+            tuples (if qListOfLists is True).
+        nProcesses - the number of processes that are working on the queue.
+        nToDo - The total number of elements in the original queue
+        qListOfLists - Boolean, whether each element of the queue corresponds to a single command or a list of ordered commands
+        qShell - Boolean, should a shell be used to run the command.
+        
+    Implementation:
+        nProcesses and nToDo are used to print out the progress.
+    """
+    while True:
+        try:
+            i, command_fns_list = cmd_and_filename_queue.get(True, 1)
+            nDone = i - nProcesses + 1
+            if nDone >= 0 and divmod(nDone, 10 if nToDo <= 200 else 100 if nToDo <= 2000 else 1000)[1] == 0:
+                PrintTime("Done %d of %d" % (nDone, nToDo))
+            if not qListOfLists:
+                command_fns_list = [command_fns_list]
+            for command, fns in command_fns_list:
+                subprocess.call(command, env=my_env, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                if fns != None:
+                    actual, target = fns
+                    if os.path.exists(actual):
+                        os.rename(actual, target)
+        except Queue.Empty:
+            return               
                             
-def Worker_RunOrderedCommandList(cmd_queue, nProcesses, nToDo, qHideStdout):
+def Worker_RunOrderedCommandList(cmd_queue, nProcesses, nToDo, qShell=True, qHideStdout=True):
     """ repeatedly takes items to process from the queue until it is empty at which point it returns. Does not take a new task
         if it can't acquire queueLock as this indicates the queue is being rearranged.
         
@@ -123,45 +166,17 @@ def Worker_RunOrderedCommandList(cmd_queue, nProcesses, nToDo, qHideStdout):
             nDone = i - nProcesses + 1
             if nDone >= 0 and divmod(nDone, 10 if nToDo <= 200 else 100 if nToDo <= 2000 else 1000)[1] == 0:
                 PrintTime("Done %d of %d" % (nDone, nToDo))
-            RunOrderedCommandList(commandSet, qHideStdout)
+            RunOrderedCommandList(commandSet, qShell, qHideStdout)
         except Queue.Empty:
             return   
-    
-def RunParallelCommands(nProcesses, commands, qShell, qHideStdout = False):
-    """nProcesss - the number of processes to run in parallel
-    commands - list of commands to be run in parallel
-    """
-    # Setup the workers and run
-    cmd_queue = mp.Queue()
-    for i, cmd in enumerate(commands):
-        cmd_queue.put((i, cmd))
-    runningProcesses = [mp.Process(target=Worker_RunCommand, args=(cmd_queue, nProcesses, i+1, qShell)) for i_ in xrange(nProcesses)]
-    for proc in runningProcesses:
-        proc.start()
-    
-    for proc in runningProcesses:
-        while proc.is_alive():
-            proc.join(10.)
-            time.sleep(2)
-    
+        
 def RunParallelOrderedCommandLists(nProcesses, commands, qHideStdout = False):
     """nProcesss - the number of processes to run in parallel
     commands - list of lists of commands where the commands in the inner list are completed in order (the i_th won't run until
     the i-1_th has finished).
     """
-    # Setup the workers and run
-    cmd_queue = mp.Queue()
-    for i, cmd in enumerate(commands):
-        cmd_queue.put((i, cmd))
-    runningProcesses = [mp.Process(target=Worker_RunOrderedCommandList, args=(cmd_queue, nProcesses, i+1, qHideStdout)) for i_ in xrange(nProcesses)]
-    for proc in runningProcesses:
-        proc.start()
-    
-    for proc in runningProcesses:
-        while proc.is_alive():
-            proc.join(10.)
-            time.sleep(2)               
-    
+    ptm = parallel_task_manager.ParallelTaskManager_singleton()
+    ptm.RunParallel(commands, True, nProcesses, qShell=True, qHideStdout = qHideStdout)              
     
 def ManageQueue(runningProcesses, cmd_queue):
     """Manage a set of runningProcesses working through cmd_queue.
@@ -190,6 +205,31 @@ def ManageQueue(runningProcesses, cmd_queue):
                 runningProcesses[i] = None
     if qError:
         Fail()              
+
+""" 
+Run a method in parallel
+"""      
+              
+def Worker_RunMethod(Function, args_queue):
+    while True:
+        try:
+            args = args_queue.get(True, 1)
+            Function(*args)
+        except Queue.Empty:
+            return 
+
+def RunMethodParallel(Function, args_queue, nProcesses):
+    runningProcesses = [mp.Process(target=Worker_RunMethod, args=(Function, args_queue)) for i_ in xrange(nProcesses)]
+    for proc in runningProcesses:
+        proc.start()
+    ManageQueue(runningProcesses, args_queue)
+    
+def ExampleRunMethodParallel():
+    F = lambda x, y: x**2
+    args_queue = mp.Queue()
+    for i in xrange(100): args_queue.put((3,i))
+    RunMethodParallel(F, args_queue, 16)
+       
 """
 Directory and file management
 -------------------------------------------------------------------------------
@@ -257,16 +297,29 @@ def GetSeqsInfo(inputDirectory, speciesToUse, nSpAll):
 def GetSpeciesToUse(speciesIDsFN):
     """Returns species indices to use and total number of species available """
     speciesToUse = []
+    speciesToUse_names = []
     nSkipped = 0
     with open(speciesIDsFN, 'rb') as speciesF:
         for line in speciesF:
-            if len(line) == 0: continue
-            elif line[0] == "#": nSkipped += 1
-            else: speciesToUse.append(int(line.split(":")[0]))
-    return speciesToUse, len(speciesToUse) + nSkipped
-    
+            line = line.rstrip()
+            if not line: continue
+            if line.startswith("#"): nSkipped += 1
+            else: 
+                iSp, spName = line.split(": ")
+                speciesToUse.append(int(iSp))
+                speciesToUse_names.append(spName)
+    return speciesToUse, len(speciesToUse) + nSkipped, speciesToUse_names
+ 
+def Success():
+    ptm = parallel_task_manager.ParallelTaskManager_singleton()
+    ptm.Stop()  
+    sys.exit()
+   
 def Fail():
-    print("ERROR: An error occurred, please review previous error messages for more information.")
+    sys.stderr.flush()
+    ptm = parallel_task_manager.ParallelTaskManager_singleton()
+    ptm.Stop()
+    print("ERROR: An error occurred, please review error messages for more information.")
     sys.exit()
     
 """
@@ -293,8 +346,10 @@ class FullAccession(IDExtractor):
         self.nameToIDDict = dict()
         with open(idsFilename, 'rb') as idsFile:
             for line in idsFile:
+                line = line.rstrip()
+                if not line: continue
 #                if line.startswith("#"): continue
-                id, accession = line.rstrip().split(": ", 1)
+                id, accession = line.split(": ", 1)
                 id = id.replace("#", "")
                 # Replace problematic characters
                 accession = accession.replace(":", "_").replace(",", "_").replace("(", "_").replace(")", "_") #.replace(".", "_")
@@ -333,22 +388,50 @@ class FirstWordExtractor(IDExtractor):
     def GetNameToIDDict(self):
         return self.nameToIDDict    
 
-
-def RenameTreeTaxa(treeFN, newTreeFilename, idsMap, qFixNegatives=False, inFormat=None):     
-#        with open(treeFN, "rb") as inputTree: treeString = inputTree.next()
+def HaveSupportValues(speciesTreeFN_ids):
+    qHaveSupport = False
     try:
-        if inFormat == None:
-            t = tree.Tree(treeFN)
+        tree.Tree(speciesTreeFN_ids, format=2)
+        qHaveSupport = True
+    except:
+        pass
+    return qHaveSupport
+
+def RenameTreeTaxa(treeFN_or_tree, newTreeFilename, idsMap, qSupport, qFixNegatives=False, inFormat=None, label=None):
+    if label != None: qSupport = False
+    try:
+        if type(treeFN_or_tree) == tree.TreeNode:
+            t = treeFN_or_tree
         else:
-            t = tree.Tree(treeFN, format=inFormat)
+            qHaveSupport = False
+            if inFormat == None:
+                try:
+                    t = tree.Tree(treeFN_or_tree, format=2)
+                    qHaveSupport = True
+                except:
+                    t = tree.Tree(treeFN_or_tree)
+            else:
+                t = tree.Tree(treeFN_or_tree, format=inFormat)
         for node in t.get_leaves():
             node.name = idsMap[node.name]
         if qFixNegatives:
             tree_length = sum([n.dist for n in t.traverse() if n != t])
             sliver = tree_length * 1e-6
-            for n in t.traverse():
-                if n.dist < 0.0: n.dist = sliver
-        t.write(outfile = newTreeFilename, format=4)  
+        iNode = 1
+        for n in t.traverse():
+            if qFixNegatives and n.dist < 0.0: n.dist = sliver
+            if label != None:
+                if (not n.is_leaf()) and (not n.is_root()):
+                    n.name = label + ("%d" % iNode)
+                    iNode += 1
+        if label != None: 
+            with open(newTreeFilename, 'wb') as outfile:
+                outfile.write(t.write(format=3)[:-1] + label + "0;")  # internal + terminal branch lengths, leaf names, node names. (tree library won't label root node)
+        else:
+            if qSupport or qHaveSupport:
+                t.write(outfile = newTreeFilename, format=2)  
+            else:
+                t.write(outfile = newTreeFilename, format=5)  
     except:
         pass
 
@@ -433,10 +516,14 @@ def GetOGsFile(userArg):
         print("and corresponding clusters file:\n    %s" % clustersFiles[0])
         return orthofinderWorkingDir, userArg, clustersFiles[0]
 
-def PrintCitation():
-    print("""\nWhen publishing work that uses OrthoFinder please cite:
-    D.M. Emms & S. Kelly (2015), OrthoFinder: solving fundamental biases in whole genome comparisons
-    dramatically improves orthogroup inference accuracy, Genome Biology 16:157.\n""")         
+def PrintCitation():  
+    print ("\nCITATION:")  
+    print (" When publishing work that uses OrthoFinder please cite:")
+    print (" Emms D.M. & Kelly S. (2015), Genome Biology 16:157\n")   
+
+    print (" If you use the species tree in your work then please also cite:")
+    print (" Emms D.M. & Kelly S. (2017), MBE 34(12): 3267-3278")
+    print (" Emms D.M. & Kelly S. (2018), bioRxiv https://doi.org/10.1101/267914")
 
 def PrintUnderline(text, qHeavy=False):
     print("\n" + text)
@@ -444,3 +531,72 @@ def PrintUnderline(text, qHeavy=False):
     if text.startswith("\n"): n -= 1
     print(("=" if qHeavy else "-") * n)
 
+def FlowText(text, n=60):
+    """Split text onto lines of no more that n characters long
+    """
+    lines = ""
+    while len(text) > 0:
+        if len(lines) > 0: lines += "\n"
+        if len(text) > n:
+            # split at no more than 60
+            iEnd = n
+            while iEnd > 0 and text[iEnd] != " ": iEnd-=1
+            if iEnd == 0:
+                # there was nowhere to split it at a blank, just have to split at 60
+                lines += text[:n]
+                text = text[n:]
+            else:
+                # split at blank
+                lines += text[:iEnd]
+                text = text[iEnd+1:]  # skip blank
+        else:
+            lines += text
+            text = ""
+    return lines
+    
+"""
+-------------------------------------------------------------------------------
+"""
+
+class nOrtho_sp(object):
+    """ matrix of number of genes in species i that have orthologues/an orthologue in species j"""
+    def __init__(self, nSp):
+        self.n = np.zeros((nSp, nSp))
+        self.n_121 = np.zeros((nSp, nSp))  # genes in i that have one orthologue in j
+        self.n_12m = np.zeros((nSp, nSp))  # genes in i that have many orthologues in j
+        self.n_m21 = np.zeros((nSp, nSp))  # genes in i that are in a many-to-one orthology relationship with genes in j
+        self.n_m2m = np.zeros((nSp, nSp))  # genes in i that are in a many-to-many orthology relationship with genes in j
+        
+    def __iadd__(self, other):
+        self.n += other.n
+        self.n_121 += other.n_121
+        self.n_12m += other.n_12m
+        self.n_m21 += other.n_m21
+        self.n_m2m += other.n_m2m
+        return self
+        
+class Finalise(object):
+    def __enter__(self):
+        pass
+    def __exit__(self, type, value, traceback):
+        ptm = parallel_task_manager.ParallelTaskManager_singleton()
+        ptm.Stop()
+        
+
+""" TEMP """        
+def RunParallelCommands(nProcesses, commands, qShell, qHideStdout = False):
+    """nProcesss - the number of processes to run in parallel
+    commands - list of commands to be run in parallel
+    """
+    # Setup the workers and run
+    cmd_queue = mp.Queue()
+    for i, cmd in enumerate(commands):
+        cmd_queue.put((i, cmd))
+    runningProcesses = [mp.Process(target=Worker_RunCommand, args=(cmd_queue, nProcesses, i+1, qShell)) for i_ in xrange(nProcesses)]
+    for proc in runningProcesses:
+        proc.start()
+    
+    for proc in runningProcesses:
+        while proc.is_alive():
+            proc.join(10.)
+            time.sleep(2)        

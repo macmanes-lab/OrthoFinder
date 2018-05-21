@@ -4,40 +4,30 @@
 *Figure 1: Automatic OrthoFinder analysis*
 
 ## What does OrthoFinder do?
-OrthoFinder is a fast, accurate and comprehensive analysis tool for comparative genomics. It finds **orthologues** and **orthogroups** infers **gene trees** for all orthogroups and infers a **rooted species tree** for the species being analysed. OrthoFinder also provides **comprehensive statistics** for comparative genomic analyses. OrthoFinder is simple to use and all you need to run it is a set of protein sequence files (one per species) in FASTA format.
+OrthoFinder is a fast, accurate and comprehensive analysis tool for comparative genomics. It finds **orthologues** and **orthogroups** infers **rooted gene trees** for all orthogroups and infers a **rooted species tree** for the species being analysed. OrthoFinder also provides **comprehensive statistics** for comparative genomic analyses. OrthoFinder is simple to use and all you need to run it is a set of protein sequence files (one per species) in FASTA format.
 
 For more details see the OrthoFinder paper below.
 
-**Emms, D.M. and Kelly, S. (2015) OrthoFinder: solving fundamental biases in whole genome comparisons dramatically improves orthogroup inference accuracy, Genome Biology 16:157**
+Emms, D.M. and Kelly, S. **(2015)** _OrthoFinder: solving fundamental biases in whole genome comparisons dramatically improves orthogroup inference accuracy._ **Genome Biology** 16:157
 
 https://genomebiology.biomedcentral.com/articles/10.1186/s13059-015-0721-2
 
-http://www.stevekellylab.com/software/orthofinder
+## Contents
+* [What are orthogroups, orthologues & paralogues?](#orthogroups-orthologues--paralogues)
+* [Why use orthogroups in your analysis](#why-orthogroups)
+* [Installing OrthoFinder](#setting-up-orthofinder)
+* [Running OrthoFinder](#running-orthofinder)
+* [OrthoFinder results files and statistics](#results-files)
+* [Adding and removing species from a completed OrthoFinder run](#advanced-usage)
+* [Preparing and using seperately run BLAST files](#running-blast-searches-separately--p-option)
 
-https://github.com/davidemms/OrthoFinder
-
-## What's New
-**Oct. 2016**:  Check out the new **PDF Manual**!
-
-**Sep. 2016**: OrthoFinder now infers the gene trees for the orthogroups, the rooted species tree, all **orthologues** between all species and calculates summary statistics.
-
-**Jul. 2016**: OrthoFinder now outputs **summary statistics** for the orthogroups produced. Statistics are in the files Statistics_Overall.csv, Statistics_PerSpecies.csv and Orthogroups_SpeciesOverlaps.csv.
-
-**Jul. 2016**: Provided **standalone binaries** for those without access to python (download the package from OrthoFinder's GitHub releases tab).
-
-**Jun. 2016**: **Parallelised** the remainder of the OrthoFinder algorithm. 
-
-**Jan. 2016**: Added the ability to **add and remove species**.
-
-**Sept. 2015**: Added the **trees_from_MSA** utility to automatically calculate multiple sequence alignments and gene trees for the orthogroups calcualted using OrthoFinder.
-
-## Orthogroups, Orthologues & Paralogues
+### Orthogroups, Orthologues & Paralogues
 'Orthologue' is a term that applies to genes from two species. Orthologues are pairs of genes that descended from a single gene in the last common ancestor (LCA) of two species (Figure 2A & B). An orthogroup is the natural extension of the concept of orthology to groups of species. An orthogroup is the group of genes descended from a single gene in the LCA of a group of species (Figure 2A). 
 When looking at the gene tree, the first divergence between the genes in an orthogroup is a speciation event and the same is true for orthologues.  
 
 As a result of gene duplication events, it is possible to have multiple genes from the same species with both orthologues and orthogroups. In the example (Figure 2A & B), the human gene HuA has two genes that are orthologues of it in chicken, ChA1 and ChA2. Looking again at the orthogroup, we see that there are two chicken genes (Figure 2A) but only one gene from mouse and human. Some authors refer to the genes ChA1 and ChA2 as co-orthologues of HuA to emphasise the fact that there are multiple orthologues. These genes are nevertheless still orthologues and so we will usually just use this broader term. In fact, gene duplication events are so common that in addition to the one-to-many relationship implied by the term 'co-orthologues', there are frequently many-to-many relationships between orthologues. All of these relationships are identified by an OrthoFinder analysis.
 
-Gene duplication events give rise to paralogues. Paralogues are pairs of genes that diverged from a single gene at a gene duplication event. The two chicken genes ChA1 and ChA2 are paralogues (Figure 2A & C). Two genes from different species can also be paralogues if the diverged from one another at a gene duplication event, although there are no examples of this in Figure 2. Since all branching events in a gene tree are either speciation events (that give rise to orthologues) or duplication events (that give rise to paralogues), any genes in the same orthogroup that are not orthologues must necessarily be paralogues.
+Gene duplication events give rise to paralogues. Paralogues are pairs of genes that diverged from a single gene at a gene duplication event. The two chicken genes ChA1 and ChA2 are paralogues (Figure 2A & C). Two genes from different species can also be paralogues if they diverged from one another at a gene duplication event, although there are no examples of this in Figure 2. Since all branching events in a gene tree are either speciation events (that give rise to orthologues) or duplication events (that give rise to paralogues), any genes in the same orthogroup that are not orthologues must necessarily be paralogues.
 
 ![Orthologues, Orthogroups & Paralogues](orthofinder/Orthogroups_Orthologues_Paralogues.png)
 *Figure 2: Orthologues, Orthogroups & Paralogues*
@@ -67,7 +57,7 @@ To perform an analysis OrthoFinder requires some dependencies to be installed an
 
 3. FastME (The appropriate version for your system, e.g. 'fastme-2.1.5-linux64', should be renamed `fastme', see instructions below.) 
 
-4. DLCpar
+4. DLCpar (This is no longer required as of version 2.0)
 
 Brief instructions are given below although users can refer to the installation notes provided with these packages for more detailed instructions. 
 
@@ -208,18 +198,18 @@ This option should always be used. It makes the BLAST searches, the tree inferen
 - **'-a number_of_orthofinder_threads'**
 The remainder of the algorithm, beyond these highly-parallelisable tasks, is relatively fast and efficient and so this option has less overall effect. It is most useful when running OrthoFinder using pre-calculated BLAST results since the time savings will be more noticeable in this case. Using this option will also increase the RAM requirements (see manual for more details).
 
-### Running BLAST Searches Separately (-p option)
-The '-p' option will prepare the files in the format required by OrthoFinder and print the set of BLAST commands that need to be run. 
-- `orthofinder -f fasta_files_directory -p`
+### Running BLAST Searches Separately (-op option)
+The '-op' option will prepare the files in the format required by OrthoFinder and print the set of BLAST commands that need to be run. 
+- `orthofinder -f fasta_files_directory -op`
 
 This is useful if you want to manage the BLAST searches yourself. For example, you may want to distribute them across multiple machines. Once the BLAST searches have been completed the orthogroups can be calculated using the '-b' command as described in Section "Using Pre-Computed BLAST Results".
 
 ### Using Pre-Computed BLAST Results
-It is possible to run OrthoFinder with pre-computed BLAST results provided they are in the correct format. They can be prepared in the correct format using the '-p' command and, equally, the files from a previous OrthoFinder run are also in the correct format to rerun using the '-b' option. The command is simply:
+It is possible to run OrthoFinder with pre-computed BLAST results provided they are in the correct format. They can be prepared in the correct format using the '-op' command and, equally, the files from a previous OrthoFinder run are also in the correct format to rerun using the '-b' option. The command is simply:
 
 - `orthofinder -b directory_with_processed_fasta_and_blast_results`
 
-If you are running the BLAST searches yourself it is strongly recommended that you use the '-p' option to prepare the files first (see Section "Running BLAST Searches Separately"). Should you need to prepare them manually, the required files and their formats are described in the appendix of the PDF Manual (for example, if you already have BLAST search results from another source and it will take too much computing time to redo them).
+If you are running the BLAST searches yourself it is strongly recommended that you use the '-op' option to prepare the files first (see Section "Running BLAST Searches Separately"). Should you need to prepare them manually, the required files and their formats are described in the appendix of the PDF Manual (for example, if you already have BLAST search results from another source and it will take too much computing time to redo them).
 
 ### Regression Tests
 A set of regression tests are included in the directory 'Tests' available from the github repository. They can be run by calling the script 'test_orthofinder.py'. They currently require version 2.2.28 of NCBI BLAST and the script will exit with an error message if this is not the case.

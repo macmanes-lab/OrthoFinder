@@ -12,10 +12,10 @@
     "cmd_line": "muscle -in INPUT -out OUTPUT"
     },
         
-    "raxmlAVX":{ 
+    "raxml":{ 
     "program_type": "tree",
-    "cmd_line": "raxmlHPC-AVX -m PROTGAMMALG -p 12345 -s INPUT -n IDENTIFIER",
-    "ouput_filename": "PATH/RAxML_bestTree_IDENTIFIER"
+    "cmd_line": "raxmlHPC-AVX -m PROTGAMMALG -p 12345 -s INPUT -n IDENTIFIER -w PATH > /dev/null",
+    "ouput_filename": "PATH/RAxML_bestTree.IDENTIFIER"
     },
     
     "iqtree":{ 
@@ -26,13 +26,13 @@
     
     "diamond":{ 
     "program_type": "search",
-    "db_cmd": "diamond-sse2 makedb --in INPUT -d OUTPUT",
-    "search_cmd": "diamond-sse2 blastp -d DATABASE -q INPUT -o OUTPUT --sensitive -p 1 --quiet -e 0.001"
+    "db_cmd": "diamond makedb --in INPUT -d OUTPUT",
+    "search_cmd": "diamond blastp -d DATABASE -q INPUT -o OUTPUT --more-sensitive -p 1 --quiet -e 0.001 --compress 1"
     },
-    
-    "diamond_more_sensitive":{ 
+        
+    "blast_gz":{ 
     "program_type": "search",
-    "db_cmd": "diamond-sse2 makedb --in INPUT -d OUTPUT",
-    "search_cmd": "diamond-sse2 blastp -d DATABASE -q INPUT -o OUTPUT --more-sensitive -p 1 --quiet -e 0.001"
+    "db_cmd": "makeblastdb -dbtype prot -in INPUT -out OUTPUT",
+    "search_cmd": "blastp -outfmt 6 -evalue 0.001 -query INPUT -db DATABASE | gzip > OUTPUT.gz"
     }
 }

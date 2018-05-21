@@ -21,9 +21,16 @@ import csv
 import argparse
 import numpy as np
 from itertools import izip_longest
+import multiprocessing as mp
+
+""" Local configuration """
+my_env = os.environ.copy()
+my_env['PATH'] += ":/home/david/software/iqtree-1.5.3-Linux/bin/" 
+""" End local configuration """
 
 __skipLongTests__ = False
 qVerbose = False
+qKeepFiles = False
 
 baseDir = os.path.dirname(os.path.realpath(__file__)) + os.sep
 qBinary = False
@@ -35,99 +42,68 @@ exampleBlastDir = baseDir + "Input/SmallExampleDataset_ExampleBlastDir/"
 goldResultsDir_smallExample = baseDir + "ExpectedOutput/SmallExampleDataset/"
 goldPrepareBlastDir = baseDir + "ExpectedOutput/SmallExampleDataset_PreparedForBlast/"
 
-version = "1.1.7"
+version = "2.2.6"
 requiredBlastVersion = "2.2.28+"
 
-citation = """When publishing work that uses OrthoFinder please cite:
-    D.M. Emms & S. Kelly (2015), OrthoFinder: solving fundamental biases in whole genome comparisons
-    dramatically improves orthogroup inference accuracy, Genome Biology 16:157.
-""" 
+standard_new_files = ("Orthogroups.csv Orthogroups.GeneCount.csv SingleCopyOrthogroups.txt Orthogroups_UnassignedGenes.csv Orthogroups.txt clusters_OrthoFinder_v%s_I1.5.txt_id_pairs.txt clusters_OrthoFinder_v%s_I1.5.txt OrthoFinder_v%s_graph.txt Statistics_PerSpecies.csv Statistics_Overall.csv Orthogroups_SpeciesOverlaps.csv" % (version, version, version)).split()
 
-expectedHelp="""OrthoFinder version %s Copyright (C) 2014 David Emms
+citation = """ When publishing work that uses OrthoFinder please cite:
+ Emms D.M. & Kelly S. (2015), Genome Biology 16:157
 
-    This program comes with ABSOLUTELY NO WARRANTY.
-    This is free software, and you are welcome to redistribute it under certain conditions.
-    For details please see the License.md that came with this software.
+ If you use the species tree in your work then please also cite:
+ Emms D.M. & Kelly S. (2017), MBE 34(12): 3267-3278
+ Emms D.M. & Kelly S. (2018), bioRxiv https://doi.org/10.1101/267914""" 
 
-=== Simple Usage ===
+expectedHelp1="""OrthoFinder version %s Copyright (C) 2014 David Emms
 
-orthofinder -f fasta_directory [-t n_blast_threads]
+SIMPLE USAGE:
+Run full OrthoFinder analysis on FASTA format proteomes in <dir>
+  orthofinder [options] -f <dir>
 
-    Infers orthogroups for the proteomes contained in fasta_directory using
-    n_blast_threads in parallel for the BLAST searches and tree inference.
+Add new species in <dir1> to previous run in <dir2> and run new analysis
+  orthofinder [options] -f <dir1> -b <dir2>
 
-=== Arguments ===
-Control where analysis starts (at least one must be specified):
+OPTIONS:
+ -t <int>          Number of parallel sequence search threads [Default = 16]
+ -a <int>          Number of parallel analysis threads [Default = 1]
+ -M <txt>          Method for gene tree inference. Options 'dendroblast' & 'msa'
+                   [Default = dendroblast]
+ -S <txt>          Sequence search program [Default = blast]"""  % version
 
--f fasta_dir, --fasta fasta_dir
-    Perform full OrthoFinder analysis for the proteins in the fasta files in fasta_dir/.
+help_not_checked="""                   Options: blast, blast_gz, diamond
+ -A <txt>          MSA program, requires '-M msa' [Default = mafft]
+                   Options: mafft, muscle, mafft
+ -T <txt>          Tree inference method, requires '-M msa' [Default = fasttree]
+                   Options: mafft, iqtree, fasttree, raxml"""
 
--b blast_results_dir, --blast blast_results_dir
-    Perform full OrthoFinder analysis using the pre-calcualted BLAST results in blast_results_dir/.
+expectedHelp2=""" -s <file>         User-specified rooted species tree
+ -I <int>          MCL inflation parameter [Default = 1.5]
+ -x <file>         Info for outputting results in OrthoXML format
+ -p <dir>          Write the temporary pickle files to <dir>
+ -1                Only perform one-way sequence search 
+ -n <txt>          Name to append to the results directory
+ -h                Print this help text
 
--f & -b options can be combined in order to add new species to an analysis without needing
-to redo the BLAST searches from a previous analysis.
+WORKFLOW STOPPING OPTIONS:
+ -op               Stop after preparing input files for BLAST
+ -og               Stop after inferring orthogroups
+ -os               Stop after writing sequence files for orthogroups
+                   (requires '-M msa')
+ -oa               Stop after inferring alignments for orthogroups
+                   (requires '-M msa')
+ -ot               Stop after inferring gene trees for orthogroups 
 
--fg orthogroup_results_dir, --from-groups orthogroup_results_dir
-    Infer gene trees and orthologues starting from OrthoFinder orthogroups in orthogroup_results_dir/.
+WORKFLOW RESTART COMMANDS:
+ -b  <dir>         Start OrthoFinder from pre-computed BLAST results in <dir>
+ -fg <dir>         Start OrthoFinder from pre-computed orthogroups in <dir>
+ -ft <dir>         Start OrthoFinder from pre-computed gene trees in <dir>
 
--ft orthologues_results_dir, --from-trees orthologues_results_dir
-    Infer orthologues starting from OrthoFinder gene trees in directory in orthologues_results_dir/.
+LICENSE:
+ Distributed under the GNU General Public License (GPLv3). See License.md
 
-Control where analysis stops (optional):
-
--op, --only-prepare
-    Only prepare the BLAST input files in the format required by OrthoFinder.
-
--og, --only-groups
-    Stop after inferring orthogroups, do not infer gene trees of orthologues.
-
--os, --only-seqs
-    Stop after inferring orthogroups and writing out sequence files for each orthogroup
-
--oa, --only-alignments
-    Stop after inferring multiple sequence alignments for each orthogroup
-
--ot, --only-trees
-    Stop after inferring gene trees, do not infer orthologues.
-
-Additional arguments:
-
--t n_blast_threads, --threads n_blast_threads
-    The number of BLAST processes to be run simultaneously. [Default is 16]
-
--a n_orthofinder_threads, --algthreads n_orthofinder_threads
-    The number of threads to use for the less readily parallelised parts of the OrthoFinder algorithm.
-    There are speed/memory trade-offs involved, see manual for details. [Default is 1]
-
--M tree_inference_method, --method tree_inference_method
-    Use tree_inference_method for gene trees. Valid options are 'dendroblast' & 'msa'. [Default is dendroblast]
-
--A msa_program, --alignment msa_program
-    Use msa_program for multiple sequence alignments (requires '-M msa' option). [Default in mafft]
-    Options:  mafft, muscle.
-
--T tree_program, --alignment tree_program
-    Use tree_program for tree inference from multiple sequence alignments (requires '-M msa' option). [Default in fasttree]
-    Options: fasttree, iqtree, raxmlAVX.
-
--I inflation_parameter, --inflation inflation_parameter
-    Specify a non-default inflation parameter for MCL. Not recommended. [Default is 1.5]
-
--x speciesInfoFilename, --orthoxml speciesInfoFilename
-    Output the orthogroups in the orthoxml format using the information in speciesInfoFilename.
-
--s rootedSpeciesTree, --speciestree rootedSpeciesTree
-    Use rootedSpeciesTree for gene-tree/species-tree reconciliation (i.e. orthologue inference).
-
--h, --help
-    Print this help text
-
-
-When publishing work that uses OrthoFinder please cite:
-    D.M. Emms & S. Kelly (2015), OrthoFinder: solving fundamental biases in whole genome comparisons
-    dramatically improves orthogroup inference accuracy, Genome Biology 16:157.
-""" % version
+CITATION:
+ When publishing work that uses OrthoFinder please cite:
+ Emms D.M. & Kelly S. (2015), Genome Biology 16:157"""
 
 class CleanUp(object):
     """Cleans up after arbitrary code that could create any/all of the 'newFiles'
@@ -139,24 +115,27 @@ class CleanUp(object):
         - deletes any files from newFiles
         - uses the copies of modifiedFiles to revert them to their previous state
     """
-    def __init__(self, newFiles, modifiedFiles, newDirs = [], qSaveFiles=False):
+    def __init__(self, newFiles, modifiedFiles, newDirs = [], qSaveFiles=False, qCleanup=True):
         """qSaveFiles is useful for debuging purposes
         """
+        if qKeepFiles: qSaveFiles = True
         self.newFiles = newFiles
         self.modifiedFiles = modifiedFiles
         self.copies = []
         assert(types.ListType == type(newDirs)) # if it were a string the code could attempt to delete every file on computer
         self.newDirs = newDirs
         self.qSaveFiles = qSaveFiles
+        self.qCleanup = qCleanup
     def __enter__(self):
         for fn in self.modifiedFiles:
             copy = fn + "_bak%d" % random.randint(0, 999999)
             shutil.copy(fn, copy)
             self.copies.append(copy)
     def __exit__(self, type, value, traceback):
+        if not self.qCleanup: return
         if self.qSaveFiles and len(self.newFiles) != 0:
             saveDir = os.path.split(self.newFiles[0])[0] + "/SavedFiles/"
-            os.mkdir(saveDir)
+            if not os.path.exists(saveDir): os.mkdir(saveDir)
             for fn in self.modifiedFiles + self.newFiles:
                 if os.path.exists(fn):
                     shutil.copy(fn, saveDir + os.path.split(fn)[1])
@@ -165,6 +144,7 @@ class CleanUp(object):
         for fn in self.newFiles:
             if os.path.exists(fn): os.remove(fn)
         for d in self.newDirs:
+            if not os.path.exists(d): continue
             if self.qSaveFiles:
                 while d[-1] == "/": d = d[:-1]
                 shutil.move(d, d + "_bak/")
@@ -188,7 +168,7 @@ class TestCommandLine(unittest.TestCase):
     """
     @classmethod
     def setUpClass(cls):
-        capture = subprocess.Popen("blastp -version", shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)    
+        capture = subprocess.Popen("blastp -version", shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=my_env)    
         stdout = "".join([x for x in capture.stdout])
         if requiredBlastVersion not in stdout:
             raise RuntimeError("Tests require BLAST version %s" % requiredBlastVersion)       
@@ -259,8 +239,7 @@ class TestCommandLine(unittest.TestCase):
         
     def test_fromblast(self):
         expectedCSVFile = exampleBlastDir + "Orthogroups.csv"
-        newFiles = ("Orthogroups.csv Orthogroups_UnassignedGenes.csv Orthogroups.txt clusters_OrthoFinder_v%s_I1.5.txt_id_pairs.txt clusters_OrthoFinder_v%s_I1.5.txt OrthoFinder_v%s_graph.txt Statistics_PerSpecies.csv Statistics_Overall.csv Orthogroups_SpeciesOverlaps.csv" % (version, version, version)).split()
-        newFiles = [exampleBlastDir + fn for fn in newFiles]
+        newFiles = [exampleBlastDir + fn for fn in standard_new_files]
         with CleanUp(newFiles, []):
             self.stdout, self.stderr = self.RunOrthoFinder("-b %s -og" % exampleBlastDir)
             self.CheckStandardRun(self.stdout, self.stderr, goldResultsDir_smallExample, expectedCSVFile)  
@@ -268,8 +247,7 @@ class TestCommandLine(unittest.TestCase):
         
     def test_fromblast_full(self):
         expectedCSVFile = exampleBlastDir + "Orthogroups.csv"
-        newFiles = ("Orthogroups.csv Orthogroups_UnassignedGenes.csv Orthogroups.txt clusters_OrthoFinder_v%s_I1.5.txt_id_pairs.txt clusters_OrthoFinder_v%s_I1.5.txt OrthoFinder_v%s_graph.txt Statistics_PerSpecies.csv Statistics_Overall.csv Orthogroups_SpeciesOverlaps.csv" % (version, version, version)).split()
-        newFiles = [exampleBlastDir + fn for fn in newFiles]
+        newFiles = [exampleBlastDir + fn for fn in standard_new_files]
         with CleanUp(newFiles, []):        
             self.stdout, self.stderr = self.RunOrthoFinder("--blast %s -og" % exampleBlastDir)
             self.CheckStandardRun(self.stdout, self.stderr, goldResultsDir_smallExample, expectedCSVFile)  
@@ -277,8 +255,7 @@ class TestCommandLine(unittest.TestCase):
         
     def test_fromblast_algthreads(self):
         expectedCSVFile = exampleBlastDir + "Orthogroups.csv"
-        newFiles = ("Statistics_PerSpecies.csv Statistics_Overall.csv Orthogroups_SpeciesOverlaps.csv Orthogroups.csv Orthogroups_UnassignedGenes.csv Orthogroups.txt clusters_OrthoFinder_v%s_I1.5.txt_id_pairs.txt clusters_OrthoFinder_v%s_I1.5.txt OrthoFinder_v%s_graph.txt" % (version, version, version)).split()
-        newFiles = [exampleBlastDir + fn for fn in newFiles]
+        newFiles = [exampleBlastDir + fn for fn in standard_new_files]
         with CleanUp(newFiles, []):
             self.stdout, self.stderr = self.RunOrthoFinder("-b %s -a 3 -og" % exampleBlastDir)
             self.CheckStandardRun(self.stdout, self.stderr, goldResultsDir_smallExample, expectedCSVFile)  
@@ -289,11 +266,11 @@ class TestCommandLine(unittest.TestCase):
         newFiles = [d + "%s%d_%d.pic" % (s, i,j) for i in xrange(1, 3) for j in xrange(3) for s in ["B", "BH"]]
         with CleanUp(newFiles, []):
             self.stdout, self.stderr = self.RunOrthoFinder("-a 2 -og -b " + d)
-            self.assertTrue("Traceback" not in self.stderr)
+#            self.assertTrue("Traceback" not in self.stderr)
             self.assertTrue("Offending line was:" in self.stderr)
             self.assertTrue("0_0	0_0	100.00	466" in self.stderr)
             self.assertTrue("Connected putatitive homologs" not in self.stdout)
-            self.assertTrue("ERROR: An error occurred, please review previous error messages for more information." in self.stdout)  
+            self.assertTrue("ERROR: An error occurred, please review error messages for more information." in self.stdout)  
         self.test_passed = True         
         
     def test_inflation(self):
@@ -318,15 +295,18 @@ class TestCommandLine(unittest.TestCase):
 
     def test_help(self):
         self.stdout, self.stderr = self.RunOrthoFinder("")
-        self.assertTrue(expectedHelp in self.stdout)
+        self.assertTrue(expectedHelp1 in self.stdout)
+        self.assertTrue(expectedHelp2 in self.stdout)
         self.assertEqual(len(self.stderr), 0)
         
         self.stdout, self.stderr = self.RunOrthoFinder("-h")
-        self.assertTrue(expectedHelp in self.stdout)
+        self.assertTrue(expectedHelp1 in self.stdout)
+        self.assertTrue(expectedHelp2 in self.stdout)
         self.assertEqual(len(self.stderr), 0)
          
         self.stdout, self.stderr = self.RunOrthoFinder("--help")
-        self.assertTrue(expectedHelp in self.stdout)
+        self.assertTrue(expectedHelp1 in self.stdout)
+        self.assertTrue(expectedHelp2 in self.stdout)
         self.assertEqual(len(self.stderr), 0)        
         self.test_passed = True     
          
@@ -341,10 +321,7 @@ class TestCommandLine(unittest.TestCase):
 #        pass
          
     def test_addOneSpecies(self):
-        expectedExtraFiles = [exampleBlastDir + fn for fn in ("Blast0_3.txt Blast3_0.txt Blast1_3.txt Blast3_1.txt Blast2_3.txt Blast3_2.txt Blast3_3.txt Species3.fa \
-        Orthogroups.csv Orthogroups.txt Orthogroups_UnassignedGenes.csv \
-        Statistics_PerSpecies.csv Statistics_Overall.csv Orthogroups_SpeciesOverlaps.csv \
-        clusters_OrthoFinder_v%s_I1.5.txt clusters_OrthoFinder_v%s_I1.5.txt_id_pairs.txt OrthoFinder_v%s_graph.txt" % (version, version, version)).split()]
+        expectedExtraFiles = [exampleBlastDir + fn for fn in standard_new_files + ("Blast0_3.txt Blast3_0.txt Blast1_3.txt Blast3_1.txt Blast2_3.txt Blast3_2.txt Blast3_3.txt Species3.fa").split()]
         expectedChangedFiles = [exampleBlastDir + fn for fn in "SpeciesIDs.txt SequenceIDs.txt".split()]
         # cleanup afterwards including failed test
         goldDir = baseDir + "ExpectedOutput/AddOneSpecies/"
@@ -362,14 +339,11 @@ class TestCommandLine(unittest.TestCase):
         self.test_passed = True
     
     def test_addTwoSpecies(self):
-        expectedExtraFiles = [exampleBlastDir + fn for fn in ("Blast0_3.txt Blast3_0.txt Blast1_3.txt Blast3_1.txt Blast2_3.txt Blast3_2.txt Blast3_3.txt Species3.fa \
-        Blast0_4.txt Blast4_0.txt Blast1_4.txt Blast4_1.txt Blast2_4.txt Blast4_2.txt Blast3_4.txt Blast4_3.txt Blast4_4.txt Species4.fa \
-        Orthogroups.csv Orthogroups.txt Orthogroups_UnassignedGenes.csv \
-        Statistics_PerSpecies.csv Statistics_Overall.csv Orthogroups_SpeciesOverlaps.csv \
-        clusters_OrthoFinder_v%s_I1.5.txt clusters_OrthoFinder_v%s_I1.5.txt_id_pairs.txt OrthoFinder_v%s_graph.txt" % (version, version, version)).split()]
+        expectedExtraFiles = [exampleBlastDir + fn for fn in standard_new_files + ("Blast0_3.txt Blast3_0.txt Blast1_3.txt Blast3_1.txt Blast2_3.txt Blast3_2.txt Blast3_3.txt Species3.fa \
+        Blast0_4.txt Blast4_0.txt Blast1_4.txt Blast4_1.txt Blast2_4.txt Blast4_2.txt Blast3_4.txt Blast4_3.txt Blast4_4.txt Species4.fa").split()]
         expectedChangedFiles = [exampleBlastDir + fn for fn in "SpeciesIDs.txt SequenceIDs.txt".split()]
         goldDir = baseDir + "ExpectedOutput/AddTwoSpecies/"
-        with CleanUp(expectedExtraFiles, expectedChangedFiles):        
+        with CleanUp(expectedExtraFiles, expectedChangedFiles):    
             self.stdout, self.stderr = self.RunOrthoFinder("-b %s -og -f %s" % (exampleBlastDir, baseDir + "Input/ExtraFasta2"))
             for fn in expectedExtraFiles:
                 os.path.split(fn)[1]
@@ -413,7 +387,7 @@ class TestCommandLine(unittest.TestCase):
     def RemoveSpeciesTest(self, inputDir, goldDir):
         """Working directory and results directory with correct files in"""
         requiredResults = [inputDir + fn for fn in "Orthogroups.csv Orthogroups_UnassignedGenes.csv Orthogroups.txt".split()]
-        expectedExtraFiles = [inputDir + fn for fn in ("Statistics_PerSpecies.csv Statistics_Overall.csv Orthogroups_SpeciesOverlaps.csv clusters_OrthoFinder_v%s_I1.5.txt clusters_OrthoFinder_v%s_I1.5.txt_id_pairs.txt OrthoFinder_v%s_graph.txt" % (version, version, version)).split()]
+        expectedExtraFiles = [inputDir + fn for fn in standard_new_files]
         with CleanUp(expectedExtraFiles + requiredResults, []):
             self.stdout, self.stderr = self.RunOrthoFinder("-b %s" % inputDir)
             for fn in requiredResults:
@@ -426,13 +400,10 @@ class TestCommandLine(unittest.TestCase):
     
     def test_removeOneAddOne(self):
         inputDir = baseDir + "Input/ExampleDataset_addOneRemoveOne/Results_Jan28/WorkingDirectory/"
-        expectedExtraFiles = [inputDir + fn for fn in ("Blast0_3.txt Blast3_0.txt Blast1_3.txt Blast3_1.txt Blast2_3.txt Blast3_2.txt Blast3_3.txt Species3.fa \
-        Orthogroups.csv Orthogroups.txt Orthogroups_UnassignedGenes.csv \
-        Statistics_PerSpecies.csv Statistics_Overall.csv Orthogroups_SpeciesOverlaps.csv \
-        clusters_OrthoFinder_v%s_I1.5.txt clusters_OrthoFinder_v%s_I1.5.txt_id_pairs.txt OrthoFinder_v%s_graph.txt" % (version, version, version)).split()] 
+        expectedExtraFiles = [inputDir + fn for fn in standard_new_files + ("Blast0_3.txt Blast3_0.txt Blast1_3.txt Blast3_1.txt Blast2_3.txt Blast3_2.txt Blast3_3.txt Species3.fa").split()] 
         expectedChangedFiles = [inputDir + fn for fn in "SpeciesIDs.txt SequenceIDs.txt".split()]
         goldDir = baseDir + "ExpectedOutput/AddOneRemoveOne/"
-        with CleanUp(expectedExtraFiles, expectedChangedFiles):        
+        with CleanUp(expectedExtraFiles, expectedChangedFiles):  
             self.stdout, self.stderr = self.RunOrthoFinder("-b %s -f %s" % (inputDir, baseDir + "Input/ExampleDataset_addOneRemoveOne/ExtraFasta/"))
 #            print(stdout)
 #            print(stderr)
@@ -449,9 +420,7 @@ class TestCommandLine(unittest.TestCase):
     def test_removeOneAddOne_fullAnalysis(self):
         inputDir = baseDir + "Input/AddOneRemoveOne_FullAnalysis/Results_Sep09/WorkingDirectory/"
         extraBlast = [inputDir + "Blast%d_4.txt" % i for i in xrange(5)] + [inputDir + "Blast4_%d.txt" % i for i in xrange(4)]
-        expectedExtraFiles = extraBlast + [inputDir + fn for fn in ("Orthogroups.csv Orthogroups.txt Orthogroups_UnassignedGenes.csv \
-        Statistics_PerSpecies.csv Statistics_Overall.csv Orthogroups_SpeciesOverlaps.csv \
-        clusters_OrthoFinder_v%s_I1.5.txt clusters_OrthoFinder_v%s_I1.5.txt_id_pairs.txt OrthoFinder_v%s_graph.txt" % (version, version, version)).split()] 
+        expectedExtraFiles = extraBlast + [inputDir + fn for fn in standard_new_files] 
         expectedChangedFiles = [inputDir + fn for fn in "SpeciesIDs.txt SequenceIDs.txt".split()]
         goldDir = baseDir + "ExpectedOutput/AddOneRemoveOne_FullAnalysis/"
         expExtraDir = [inputDir + "Orthologues_%s/" % Date()]
@@ -498,7 +467,7 @@ class TestCommandLine(unittest.TestCase):
         expectedExtraFiles = [orthologuesDir + "SpeciesTree_rooted.txt"]
         expExtraDir = [orthologuesDir + d for d in ["Gene_Trees/", "Orthologues/", "WorkingDirectory/", ""]]
         with CleanUp(expectedExtraFiles, expectedChangedFiles, expExtraDir):        
-            self.stdout, self.stderr = self.RunOrthoFinder("-fg " + inputDir)
+            self.stdout, self.stderr = self.RunOrthoFinder("-R dlcpar -fg " + inputDir )
             self.assertEquals(312, len(glob.glob(orthologuesDir + "Gene_Trees/*tree.txt")))
             self.assertTrue(os.path.exists(orthologuesDir + "Orthologues/Orthologues_Mycoplasma_agalactiae"))
             self.assertTrue(os.path.exists(orthologuesDir + "Orthologues/Orthologues_Mycoplasma_hyopneumoniae"))
@@ -514,7 +483,7 @@ class TestCommandLine(unittest.TestCase):
         expectedExtraFiles = [orthologuesDir + "Orthologues/Orthologues_Mycoplasma_agalactiae/Mycoplasma_agalactiae__v__Mycoplasma_gallisepticum.csv"]
         expExtraDir = [resultsDir]
         with CleanUp(expectedExtraFiles, expectedChangedFiles, expExtraDir):        
-            self.stdout, self.stderr = self.RunOrthoFinder("-f " + inputDir + (" -s %sInput/RootedSpeciesTree2.txt"%baseDir) ) 
+            self.stdout, self.stderr = self.RunOrthoFinder("-R dlcpar -f " + inputDir + (" -s %sInput/RootedSpeciesTree2.txt"%baseDir) ) 
             self.assertEquals(312, len(glob.glob(orthologuesDir + "Gene_Trees/*tree.txt")))
             self.assertTrue(os.path.exists(orthologuesDir + "Orthologues/Orthologues_Mycoplasma_agalactiae"))
             self.assertTrue(os.path.exists(orthologuesDir + "Orthologues/Orthologues_Mycoplasma_hyopneumoniae"))
@@ -529,7 +498,7 @@ class TestCommandLine(unittest.TestCase):
         expectedExtraFiles = []
         expExtraDir = [orthologuesDir + d for d in ["Gene_Trees/", "Orthologues/", "WorkingDirectory/", ""]]
         with CleanUp(expectedExtraFiles, expectedChangedFiles, expExtraDir):        
-            self.stdout, self.stderr = self.RunOrthoFinder("-fg " + inputDir + (" -s %sInput/RootedSpeciesTree2.txt"%baseDir) ) 
+            self.stdout, self.stderr = self.RunOrthoFinder("-R dlcpar -fg " + inputDir + (" -s %sInput/RootedSpeciesTree2.txt"%baseDir) ) 
             self.assertEquals(312, len(glob.glob(orthologuesDir + "Gene_Trees/*tree.txt")))
             self.assertTrue(os.path.exists(orthologuesDir + "Orthologues/Orthologues_Mycoplasma_agalactiae"))
             self.assertTrue(os.path.exists(orthologuesDir + "Orthologues/Orthologues_Mycoplasma_hyopneumoniae"))
@@ -539,16 +508,16 @@ class TestCommandLine(unittest.TestCase):
                                
     def test_userSpeciesTree_fromTrees(self):
         inputDir = baseDir + "Input/FromTrees/Orthologues_Oct27/"
-        orthologuesDir = inputDir + "Orthologues_%s/" % Date()
+        orthologuesDir = inputDir + "New_Analysis_From_Trees_%s/" % Date()
         expectedChangedFiles = []
         expectedExtraFiles = []
-        expExtraDir = [orthologuesDir + "../WorkingDirectory/dlcpar/", orthologuesDir + "../WorkingDirectory/Recon_Gene_Trees/", orthologuesDir]
+        expExtraDir = [orthologuesDir]
         with CleanUp(expectedExtraFiles, expectedChangedFiles, expExtraDir):        
-            self.stdout, self.stderr = self.RunOrthoFinder("-ft " + inputDir + (" -s %sInput/RootedSpeciesTree2.txt"%baseDir) ) 
-            self.assertTrue(os.path.exists(orthologuesDir + "Orthologues_Mycoplasma_agalactiae"))
-            self.assertTrue(os.path.exists(orthologuesDir + "Orthologues_Mycoplasma_hyopneumoniae"))
-            self.assertTrue(os.path.exists(orthologuesDir + "Orthologues_Mycoplasma_agalactiae/Mycoplasma_agalactiae__v__Mycoplasma_gallisepticum.csv"))
-            self.assertTrue(filecmp.cmp(orthologuesDir + "Orthologues_Mycoplasma_agalactiae/Mycoplasma_agalactiae__v__Mycoplasma_gallisepticum.csv",
+            self.stdout, self.stderr = self.RunOrthoFinder("-R dlcpar -ft " + inputDir + (" -s %sInput/RootedSpeciesTree2.txt"%baseDir) ) 
+            self.assertTrue(os.path.exists(orthologuesDir + "Orthologues/Orthologues_Mycoplasma_agalactiae"))
+            self.assertTrue(os.path.exists(orthologuesDir + "Orthologues/Orthologues_Mycoplasma_hyopneumoniae"))
+            self.assertTrue(os.path.exists(orthologuesDir + "Orthologues/Orthologues_Mycoplasma_agalactiae/Mycoplasma_agalactiae__v__Mycoplasma_gallisepticum.csv"))
+            self.assertTrue(filecmp.cmp(orthologuesDir + "Orthologues/Orthologues_Mycoplasma_agalactiae/Mycoplasma_agalactiae__v__Mycoplasma_gallisepticum.csv",
                                         baseDir + "ExpectedOutput/Orthologues/Mycoplasma_agalactiae__v__Mycoplasma_gallisepticum_root2.csv"))
                                
 #    def test_userSpeciesTree_fromBlast(self):
@@ -669,7 +638,7 @@ class TestCommandLine(unittest.TestCase):
         inputDir = baseDir + "Input/DisallowedCharacters/"
         orthologuesDir = inputDir + "Orthologues_%s/" % Date()
         with CleanUp([], [], [orthologuesDir]):        
-            self.stdout, self.stderr = self.RunTrees(inputDir)
+            self.stdout, self.stderr = self.RunOrthoFinder("-t 8 -fg %s -ot -M msa -s %s" % (inputDir, inputDir+"SpeciesTree.txt"))
             fn = orthologuesDir + "Gene_Trees/OG0000000_tree.txt"
             self.assertTrue(os.path.exists(fn))
             with open(fn, 'rb') as infile:
@@ -721,15 +690,15 @@ class TestCommandLine(unittest.TestCase):
     def test_DistanceMatrixEvalues(self):
         if qBinary:
             self.skipTest("Skipping unit test. Test can be run on sourcecode version of OrthoFinder.") 
-        import get_orthologues
+        import orthologues
         m = np.zeros((2,2))
-        m = np.matrix([[0, 1e-9, 0.1, 1], [1e-9, 0, 1, 1], [0.1, 1, 0, 1], [1, 1, 1, 0]])
+        m = [mp.Array('d', [0, 1e-9, 0.1, 1]), mp.Array('d', [1e-9, 0, 1, 1]), mp.Array('d', [0.1, 1, 0, 1]), mp.Array('d', [1, 1, 1, 0])]
 #        m[0,1] = 
 #        m[1,0] = 0.1
         names = ["a", "b", "c", "d"]
         outFN = baseDir + "Input/Distances.phy"
         max_og = 1.
-        get_orthologues.DendroBLASTTrees.WritePhylipMatrix(m, names, outFN, max_og)
+        orthologues.DendroBLASTTrees.WritePhylipMatrix(m, names, outFN, max_og)
         # read values and check they are written in the corect format
         with open(outFN, 'rb') as infile:
             infile.next()
@@ -745,10 +714,170 @@ class TestCommandLine(unittest.TestCase):
         self.assertTrue("mafft" in self.stdout)
         self.assertTrue("muscle" in self.stdout)
         self.assertTrue("fasttree" in self.stdout)
-        self.assertTrue("raxmlAVX" in self.stdout)
+        self.assertTrue("raxml" in self.stdout)
         self.assertTrue("iqtree" in self.stdout)
         
+    def test_issue83(self):
+        d = baseDir + "/Input/ISSUES/Issue83/"
+        resultsDir = d + "Orthologues_%s/" % Date() 
+        newFiles = [d + f for f in ("Orthogroups.orthoxml Orthogroups.csv Orthogroups.GeneCount.csv Orthogroups_UnassignedGenes.csv Orthogroups.txt clusters_OrthoFinder_v%s_I1.5.txt_id_pairs.txt clusters_OrthoFinder_v%s_I1.5.txt OrthoFinder_v%s_graph.txt Statistics_PerSpecies.csv Statistics_Overall.csv Orthogroups_SpeciesOverlaps.csv SingleCopyOrthogroups.txt" % (version, version, version)).split()]
+        with CleanUp(newFiles, [], [resultsDir]):    
+            self.CheckOrthoFinderSuccess("-b %s" % d)
+            
+    def test_nucleotide_sequences(self):
+        d = baseDir + "Input/NucleotideSequences/"
+        resultsDir = d + "Results_%s/" % Date() 
+        with CleanUp([], [], [resultsDir]):
+            self.stdout, self.stderr = self.RunOrthoFinder("-f %s -og" % d)
+            self.assertTrue("ERROR: Mycoplasma_agalactiae_n.fa appears to contain nucleotide sequences instead of amino acid sequences." in self.stdout)
         
+    def test_non_default_msa_method(self):
+        resultsDir = exampleBlastDir + "Orthologues_%s/" % Date() 
+        newFiles = [exampleBlastDir + f for f in standard_new_files]
+        with CleanUp(newFiles, [], [resultsDir]):    
+            self.stdout, self.stderr = self.RunOrthoFinder("-b %s -ot -M msa -A muscle -t 8" % exampleBlastDir)  
+            # Successful run: Sequences, Alignments, Trees
+#            self.assertTrue("Inferring multiple sequence alignments for species tree" in self.stdout)
+            self.assertEqual(1177, len(glob.glob(resultsDir + "Sequences/*fa")))
+            self.assertEqual(427, len(glob.glob(resultsDir + "Alignments/*fa")))
+            self.assertEqual(301, len(glob.glob(resultsDir + "Gene_Trees/*txt")))
+            self.assertGreater(os.stat(resultsDir + "Sequences/OG0000200.fa").st_size, 200)            
+            self.assertGreater(os.stat(resultsDir + "Alignments/OG0000200.fa").st_size, 200)            
+            self.assertGreater(os.stat(resultsDir + "Gene_Trees/OG0000200_tree.txt").st_size, 200)            
+            # check two of the alignment files are what would be expected for muscle versus mafft
+            d = baseDir + "ExpectedOutput/SmallExampleDataset/AlignmentsAndTrees/"
+            d_exp_mafft = d + "mafft/"
+            d_exp_muscle = d + "muscle/"
+            d_act = resultsDir + "WorkingDirectory/Alignments_ids/"
+            fn = "OG0000050.fa"
+            self.assertTrue(filecmp.cmp(d_exp_muscle + fn, d_act + fn,  shallow=False))
+            self.assertFalse(filecmp.cmp(d_exp_mafft + fn, d_act + fn,  shallow=False))
+            fn = "OG0000100.fa"
+            self.assertTrue(filecmp.cmp(d_exp_muscle + fn, d_act + fn,  shallow=False))
+            self.assertFalse(filecmp.cmp(d_exp_mafft + fn, d_act + fn,  shallow=False))
+            
+    def test_non_default_tree_method(self):
+        resultsDir = exampleBlastDir + "Orthologues_%s/" % Date() 
+        newFiles = [exampleBlastDir + f for f in standard_new_files]    
+        with CleanUp(newFiles, [], [resultsDir]):    
+            self.stdout, self.stderr = self.RunOrthoFinder("-b %s -ot -M msa -T iqtree -t 8" % exampleBlastDir) 
+            # Successful run: Sequences, Alignments, Trees
+#            self.assertTrue("Inferring multiple sequence alignments for species tree" in self.stdout)
+            self.assertEqual(1177, len(glob.glob(resultsDir + "Sequences/*fa")))
+            self.assertEqual(427, len(glob.glob(resultsDir + "Alignments/*fa")))
+            self.assertEqual(301, len(glob.glob(resultsDir + "Gene_Trees/*txt")))
+            self.assertGreater(os.stat(resultsDir + "Sequences/OG0000200.fa").st_size, 200)            
+            self.assertGreater(os.stat(resultsDir + "Alignments/OG0000200.fa").st_size, 200)            
+            self.assertGreater(os.stat(resultsDir + "Gene_Trees/OG0000200_tree.txt").st_size, 200)            
+            # check two of the tree files are what would be expected for iqtree versus fasttree
+            self.assertTrue(self.FileContainsText(resultsDir + "/WorkingDirectory/Alignments_ids/OG0000000.log", "Analysis results written to"))
+            self.assertTrue(self.FileContainsText(resultsDir + "/WorkingDirectory/Alignments_ids/OG0000100.log", "Analysis results written to"))
+            self.assertTrue(self.FileContainsText(resultsDir + "/WorkingDirectory/Alignments_ids/OG0000300.log", "Analysis results written to"))
+            d_exp_mafft = baseDir + "ExpectedOutput/SmallExampleDataset/AlignmentsAndTrees/mafft/"
+            d_act = resultsDir + "WorkingDirectory/Alignments_ids/"
+            fn = "OG0000050.fa"
+            self.assertTrue(filecmp.cmp(d_exp_mafft + fn, d_act + fn,  shallow=False))
+
+   
+    def test_non_default_msa_and_tree_method(self):
+        resultsDir = exampleBlastDir + "Orthologues_%s/" % Date() 
+        newFiles = [exampleBlastDir + f for f in standard_new_files]
+        with CleanUp(newFiles, [], [resultsDir]):
+            self.stdout, self.stderr = self.RunOrthoFinder("-b %s -ot -M msa -T iqtree -A muscle -t 8" % exampleBlastDir) 
+#            self.assertTrue("Inferring multiple sequence alignments for species tree" in self.stdout)   # too few species
+            self.assertEqual(1177, len(glob.glob(resultsDir + "Sequences/*fa")))
+            self.assertEqual(427, len(glob.glob(resultsDir + "Alignments/*fa")))
+            self.assertEqual(301, len(glob.glob(resultsDir + "Gene_Trees/*txt")))
+            self.assertGreater(os.stat(resultsDir + "Sequences/OG0000200.fa").st_size, 200)            
+            self.assertGreater(os.stat(resultsDir + "Alignments/OG0000200.fa").st_size, 200)            
+            self.assertGreater(os.stat(resultsDir + "Gene_Trees/OG0000200_tree.txt").st_size, 200)      
+            
+            # check two of the alignment files are what would be expected for muscle versus mafft
+            d = baseDir + "ExpectedOutput/SmallExampleDataset/AlignmentsAndTrees/"
+            d_exp_mafft = d + "mafft/"
+            d_exp_muscle = d + "muscle/"
+            d_act = resultsDir + "WorkingDirectory/Alignments_ids/"
+            fn = "OG0000050.fa"
+            self.assertTrue(filecmp.cmp(d_exp_muscle + fn, d_act + fn,  shallow=False))
+            self.assertFalse(filecmp.cmp(d_exp_mafft + fn, d_act + fn,  shallow=False))
+            fn = "OG0000100.fa"
+            self.assertTrue(filecmp.cmp(d_exp_muscle + fn, d_act + fn,  shallow=False))
+            self.assertFalse(filecmp.cmp(d_exp_mafft + fn, d_act + fn,  shallow=False))
+            
+            # check the trees
+            self.assertTrue(self.FileContainsText(resultsDir + "/WorkingDirectory/Alignments_ids/OG0000000.log", "Analysis results written to"))
+            self.assertTrue(self.FileContainsText(resultsDir + "/WorkingDirectory/Alignments_ids/OG0000100.log", "Analysis results written to"))
+            self.assertTrue(self.FileContainsText(resultsDir + "/WorkingDirectory/Alignments_ids/OG0000300.log", "Analysis results written to"))
+        
+        
+    def test_convert_tree_ids(self):
+        d = baseDir + "Input/ConvertIDs/"
+        newFiles = [d + "SpeciesTree_ids_accessions.txt", d + "SpeciesTree_ids_nodelabels_accessions.txt", d + "SpeciesTree_ids_support_accessions.txt"]
+        exe = os.path.split(orthofinder)[0] + "/tools/convert_tree_ids.py"
+        with CleanUp(newFiles, [], []):
+            p = subprocess.Popen("%s %s %s" % (exe, d + "SpeciesTree_ids.txt", d + "SpeciesIDs.txt"), shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=my_env)    
+            p = subprocess.Popen("%s %s %s" % (exe, d + "SpeciesTree_ids_support.txt", d + "SpeciesIDs.txt"), shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=my_env)    
+            p = subprocess.Popen("%s %s %s" % (exe, d + "SpeciesTree_ids_nodelabels.txt", d + "SpeciesIDs.txt"), shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=my_env)    
+            p.wait()
+            self.assertTrue(filecmp.cmp(d + "SpeciesTree_ids_accessions.txt", baseDir + "ExpectedOutput/SpeciesTree_ids_accessions.txt"))
+            self.assertTrue(filecmp.cmp(d + "SpeciesTree_ids_support_accessions.txt", baseDir + "ExpectedOutput/SpeciesTree_ids_accessions_support.txt"))
+            self.assertTrue(filecmp.cmp(d + "SpeciesTree_ids_nodelabels_accessions.txt", baseDir + "ExpectedOutput/SpeciesTree_ids_accessions_nodelabels.txt"))
+        
+    def test_extra_brackets_user_species_tree(self):
+        # from start
+        inputDir = baseDir + "Input/ExampleDataset_renamed/"
+        resultsDir = inputDir + "Results_%s/" % Date()
+        orthologuesDir = resultsDir + "Orthologues_%s/" % Date()
+        expectedChangedFiles = []
+        expectedExtraFiles = [orthologuesDir + "Orthologues/Orthologues_Mycoplasma_agalactiae/Mycoplasma_agalactiae__v__Mycoplasma_gallisepticum.csv"]
+        expExtraDir = [resultsDir]
+        with CleanUp(expectedExtraFiles, expectedChangedFiles, expExtraDir):        
+            self.stdout, self.stderr = self.RunOrthoFinder("-R dlcpar -f " + inputDir + (" -s %sInput/RootedSpeciesTree2_extra_brackets.txt"%baseDir) ) 
+            self.assertEquals(312, len(glob.glob(orthologuesDir + "Gene_Trees/*tree.txt")))
+            self.assertTrue(os.path.exists(orthologuesDir + "Orthologues/Orthologues_Mycoplasma_agalactiae"))
+            self.assertTrue(os.path.exists(orthologuesDir + "Orthologues/Orthologues_Mycoplasma_hyopneumoniae"))
+            self.assertTrue(os.path.exists(orthologuesDir + "Orthologues/Orthologues_Mycoplasma_agalactiae/Mycoplasma_agalactiae__v__Mycoplasma_gallisepticum.csv"))
+            self.assertTrue(filecmp.cmp(orthologuesDir + "Orthologues/Orthologues_Mycoplasma_agalactiae/Mycoplasma_agalactiae__v__Mycoplasma_gallisepticum.csv",
+                                        baseDir + "ExpectedOutput/Orthologues/Mycoplasma_agalactiae__v__Mycoplasma_gallisepticum_root2.csv"))
+                               
+        # from groups
+        inputDir = baseDir + "Input/FromOrthogroups/"
+        orthologuesDir = inputDir + "Orthologues_%s/" % Date()
+        expectedChangedFiles = []
+        expectedExtraFiles = []
+        expExtraDir = [orthologuesDir + d for d in ["Gene_Trees/", "Orthologues/", "WorkingDirectory/", ""]]
+        with CleanUp(expectedExtraFiles, expectedChangedFiles, expExtraDir):        
+            self.stdout, self.stderr = self.RunOrthoFinder("-R dlcpar -fg " + inputDir + (" -s %sInput/RootedSpeciesTree2_extra_brackets.txt"%baseDir) ) 
+            self.assertEquals(312, len(glob.glob(orthologuesDir + "Gene_Trees/*tree.txt")))
+            self.assertTrue(os.path.exists(orthologuesDir + "Orthologues/Orthologues_Mycoplasma_agalactiae"))
+            self.assertTrue(os.path.exists(orthologuesDir + "Orthologues/Orthologues_Mycoplasma_hyopneumoniae"))
+            self.assertTrue(os.path.exists(orthologuesDir + "Orthologues/Orthologues_Mycoplasma_agalactiae/Mycoplasma_agalactiae__v__Mycoplasma_gallisepticum.csv"))
+            self.assertTrue(filecmp.cmp(orthologuesDir + "Orthologues/Orthologues_Mycoplasma_agalactiae/Mycoplasma_agalactiae__v__Mycoplasma_gallisepticum.csv",
+                                        baseDir + "ExpectedOutput/Orthologues/Mycoplasma_agalactiae__v__Mycoplasma_gallisepticum_root2.csv"))        
+
+    def TestResolve(self, case):    
+        resolve_script = "python " + os.path.split(orthofinder)[0] + "/scripts/resolve.py"
+        inDir = baseDir + "Input/Resolve/"
+        expDir = baseDir + "ExpectedOutput/Resolve/"
+        infn = inDir + case
+        expectedResultfn = infn + ".rec.tre"
+        goldfn = expDir + case + ".rec.tre"
+        with CleanUp([expectedResultfn], [], []):        
+            subprocess.call("%s -s dash %s" % (resolve_script, infn), shell=True, env=my_env)   #, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+            self.assertTrue(filecmp.cmp(goldfn, expectedResultfn))  
+    
+    def test_resolve_nonbinary_issue147(self):
+        """
+        Error was cause when one of the nested clades in which an overalp occurs was assumed to be binary
+        """
+        self.TestResolve("non_binary_tree.txt")
+        self.TestResolve("non_binary_tree_caseB_t1.txt")
+        self.TestResolve("non_binary_tree_caseB_t2.txt")
+        self.TestResolve("non_binary_tree_caseB_b_t1.txt")
+        self.TestResolve("non_binary_tree_caseB_b_t2.txt")
+        self.TestResolve("non_binary_tree_caseC_t1.txt")
+    
+    
 #    def test_treesExtraSpecies(self):
 #        pass
         
@@ -766,18 +895,24 @@ class TestCommandLine(unittest.TestCase):
         
     def RunOrthoFinder(self, commands):
         if qBinary:
-            capture = subprocess.Popen("%s %s" % (orthofinder_bin, commands), shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)    
+            capture = subprocess.Popen("%s %s" % (orthofinder_bin, commands), shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=my_env)    
         else:
-            capture = subprocess.Popen("python %s %s" % (orthofinder, commands), shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)    
+            capture = subprocess.Popen("python %s %s" % (orthofinder, commands), shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=my_env)    
         stdout = "".join([x for x in capture.stdout])
         stderr = "".join([x for x in capture.stderr])
         return stdout, stderr
         
+    def CheckOrthoFinderSuccess(self, commands):
+        stdout, stderr = self.RunOrthoFinder(commands)
+        self.assertEqual(len(stderr), 0)
+        self.assertTrue("When publishing work that uses OrthoFinder please cite" in stdout)
+        return stdout, stderr
+        
     def RunTrees(self, commands):
         if qBinary:
-            capture = subprocess.Popen("%s -t 8 -fg %s -ot -M msa" % (orthofinder_bin, commands), shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)    
+            capture = subprocess.Popen("%s -t 8 -fg %s -ot -M msa" % (orthofinder_bin, commands), shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=my_env)    
         else:
-            capture = subprocess.Popen("python %s -t 8 -fg %s -ot -M msa" % (orthofinder, commands), shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)    
+            capture = subprocess.Popen("python %s -t 8 -fg %s -ot -M msa" % (orthofinder, commands), shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=my_env)    
         stdout = "".join([x for x in capture.stdout])
         stderr = "".join([x for x in capture.stderr])
         return stdout, stderr
@@ -860,7 +995,12 @@ class TestCommandLine(unittest.TestCase):
                 if gold != actual:
                     shutil.copy(fn_actual, baseDir + "FailedOutput/" + os.path.split(fn_actual)[1]) 
                     self.assertTrue(False, msg=fn_gold) 
-            
+    
+    def FileContainsText(self, filename, expectedText):
+        with open(filename, 'rb') as infile:
+            for line in infile:
+                if expectedText in line: return True
+        return False
 """ 
 Test to add:
     - Extra results files when already files in directory (and clusters and graph file)
@@ -872,11 +1012,14 @@ Test to add:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("-b", "--binaries", action="store_true", help="Run tests on binary files")
+    parser.add_argument("-s", "--set", action="store_true", help="Run a set of tests specified below")
     parser.add_argument("-t", "--test", help="Individual test to run")
     parser.add_argument("-d", "--dir", help="Test program in specified directory")
     parser.add_argument("-v", "--verbose", action="store_true", help="Print stdout from failing orthofinder run")
+    parser.add_argument("-k", "--keep_files", action="store_true", help="don't delete results files at end of a run")
     
     args = parser.parse_args()
+    qKeepFiles = args.keep_files
     if args.dir:
         orthofinder = args.dir + "/orthofinder.py"
         orthofinder_bin = os.path.splitext(orthofinder)[0]
@@ -888,10 +1031,22 @@ if __name__ == "__main__":
     print("  " + orthofinder_bin if qBinary else orthofinder)
     print("")
     
+    if args.test != None and args.set:
+        print("Incompatible options, -t and -s")
+        sys.exit()
+    
     if args.test != None:
         suite = unittest.TestSuite()
         print("Running single test: %s" % args.test)
         suite.addTest(TestCommandLine(args.test))
+        runner = unittest.TextTestRunner()
+        runner.run(suite)
+    elif args.set:
+        suite = unittest.TestSuite()
+        print("Running selected tests")
+        suite.addTest(TestCommandLine("test_non_default_msa_method"))
+        suite.addTest(TestCommandLine("test_non_default_tree_method"))
+        suite.addTest(TestCommandLine("test_non_default_msa_and_tree_method"))
         runner = unittest.TextTestRunner()
         runner.run(suite)
     else:

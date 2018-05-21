@@ -24,26 +24,47 @@
 # For any enquiries send an email to David Emms
 # david_emms@hotmail.com  
 
+import os
 import sys
 import csv
+import gzip
 from scipy import sparse
+
+import util
               
 #def NumberOfSequences(seqsInfo, iSpecies):
 #    return (seqsInfo.seqStartingIndices[iSpecies+1] if iSpecies != seqsInfo.nSpecies-1 else seqsInfo.nSeqs) - seqsInfo.seqStartingIndices[iSpecies] 
                          
-def GetBLAST6Scores(seqsInfo, fileInfo, iSpecies, jSpecies, qExcludeSelfHits = True, sep = "_"): 
+def GetBLAST6Scores(seqsInfo, fileInfo, iSpecies, jSpecies, qExcludeSelfHits = True, sep = "_", qDoubleBlast=True): 
+    qSameSpecies = iSpecies==jSpecies
+    qCheckForSelfHits = qExcludeSelfHits and qSameSpecies
+    if not qDoubleBlast:
+        qRev = (iSpecies > jSpecies)
+    else:
+        qRev = False      
+    if qRev:
+        iQ = 1 
+        iH = 0
+        iSpeciesOpen = jSpecies
+        jSpeciesOpen = iSpecies
+    else:        
+        iQ = 0 
+        iH = 1 
+        iSpeciesOpen = iSpecies
+        jSpeciesOpen = jSpecies
     nSeqs_i = seqsInfo.nSeqsPerSpecies[iSpecies]
     nSeqs_j = seqsInfo.nSeqsPerSpecies[jSpecies]
     B = sparse.lil_matrix((nSeqs_i, nSeqs_j))
     row = ""
+    fn = fileInfo.workingDir + "Blast%d_%d.txt" % (iSpeciesOpen, jSpeciesOpen)
     try:
-        with open(fileInfo.workingDir + "Blast%d_%d.txt" % (iSpecies, jSpecies), 'rb') as blastfile:
+        with (gzip.open(fn + ".gz", 'rb') if os.path.exists(fn + ".gz") else open(fn, 'rb')) as blastfile:
             blastreader = csv.reader(blastfile, delimiter='\t')
             for row in blastreader:    
                 # Get hit and query IDs
                 try:
-                    species1ID, sequence1ID = map(int, row[0].split(sep, 1)) 
-                    species2ID, sequence2ID = map(int, row[1].split(sep, 1))     
+                    sequence1ID = int(row[iQ].split(sep, 1)[1])
+                    sequence2ID = int(row[iH].split(sep, 1)[1])     
                 except (IndexError, ValueError):
                     sys.stderr.write("\nERROR: Query or hit sequence ID in BLAST results file was missing or incorrectly formatted.\n")
                     raise
@@ -53,7 +74,7 @@ def GetBLAST6Scores(seqsInfo, fileInfo, iSpecies, jSpecies, qExcludeSelfHits = T
                 except (IndexError, ValueError):
                     sys.stderr.write("\nERROR: 12th field in BLAST results file line should be the bit-score for the hit\n")
                     raise
-                if (qExcludeSelfHits and species1ID == species2ID and sequence1ID == sequence2ID):
+                if (qCheckForSelfHits and sequence1ID == sequence2ID):
                     continue
                 # store bit score
                 try:
@@ -67,9 +88,9 @@ def GetBLAST6Scores(seqsInfo, fileInfo, iSpecies, jSpecies, qExcludeSelfHits = T
                     kSpecies, nSeqs_k, sequencekID = (iSpecies,  nSeqs_i, sequence1ID) if sequence1ID >= nSeqs_i else (jSpecies,  nSeqs_j, sequence2ID)
                     sys.stderr.write("Species%d.fa contains only %d sequences " % (kSpecies,  nSeqs_k)) 
                     sys.stderr.write("but found a query/hit in the Blast%d_%d.txt for sequence %d_%d (i.e. %s sequence in species %d).\n" %  (iSpecies, jSpecies, kSpecies, sequencekID, ord(sequencekID+1), kSpecies))
-                    sys.exit()
+                    util.Fail()
     except Exception:
         sys.stderr.write("Malformatted line in %sBlast%d_%d.txt\nOffending line was:\n" % (fileInfo.workingDir, iSpecies, jSpecies))
         sys.stderr.write("\t".join(row) + "\n")
-        sys.exit()
+        raise 
     return B  
