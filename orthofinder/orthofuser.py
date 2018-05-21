@@ -1353,7 +1353,7 @@ def CreateSearchDatabases(dirs, options, program_caller):
     nDB = max(dirs.speciesToUse) + 1
     for iSp in xrange(nDB):
         if options.search_program == "blast":
-            command = ["makeblastdb", "-dbtype", "prot", "-in", dirs.workingDir + "Species%d.fa" % iSp, "-out", dirs.workingDir + "BlastDBSpecies%d" % iSp]
+            command = ["makeblastdb", "-dbtype", "nucl", "-in", dirs.workingDir + "Species%d.fa" % iSp, "-out", dirs.workingDir + "BlastDBSpecies%d" % iSp]
             util.PrintTime("Creating Blast database %d of %d" % (iSp + 1, nDB))
             RunBlastDBCommand(command) 
         else:
