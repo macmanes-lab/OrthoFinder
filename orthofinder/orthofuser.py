@@ -1482,13 +1482,11 @@ def ProcessesNewFasta(fastaDir, existingDirs=None, speciesToUse_prev_names=[], n
                         iSeq += 1
                     else:
                         if not qHasAA and (iLine < mLinesToCheck):
-#                            qHasAA = qHasAA or any([c in line for c in ['D','E','F','H','I','K','L','M','N','P','Q','R','S','V','W','Y']])
                             qHasAA = qHasAA or any([c in line for c in ['E','F','I','L','P','Q']]) # AAs minus nucleotide ambiguity codes
                         outputFasta.write(line)
                 outputFasta.write("\n")
             if not qHasAA:
-                qOk = False
-                print("ERROR: %s appears to contain nucleotide sequences instead of amino acid sequences." % fastaFilename)
+                qOk = True
             iSpecies += 1
             iSeq = 0
             outputFasta.close()
