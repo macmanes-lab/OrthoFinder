@@ -1589,8 +1589,6 @@ def ProcessesNewFasta(fastaDir, speciesInfoObj_prev = None, speciesToUse_prev_na
                         outputFasta.write(line)
                 outputFasta.write("\n")
             if not qHasAA:
-                qOk = False
-                print("ERROR: %s appears to contain nucleotide sequences instead of amino acid sequences." % fastaFilename)
             iSpecies += 1
             iSeq = 0
             outputFasta.close()
