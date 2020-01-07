@@ -1588,7 +1588,6 @@ def ProcessesNewFasta(fastaDir, speciesInfoObj_prev = None, speciesToUse_prev_na
                             qHasAA = qHasAA or any([c in line for c in ['E','F','I','L','P','Q']]) # AAs minus nucleotide ambiguity codes
                         outputFasta.write(line)
                 outputFasta.write("\n")
-            if not qHasAA:
             iSpecies += 1
             iSeq = 0
             outputFasta.close()
